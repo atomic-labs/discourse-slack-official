@@ -1,20 +1,28 @@
 # name: discourse-slack-official
 # about: This is intended to be a feature-rich plugin for slack-discourse integration
 # version: 1.0.0
-# authors: Nick Sahler (nicksahler), Dave McClure (mcwumbly) for slack backdoor code.
-# url: https://github.com/discourse/discourse-slack-official
+# authors: Nick Sahler (nicksahler), Dave McClure (mcwumbly) for slack backdoor code. Andrew Paradi (andrewparadi) for search.
+# url: https://github.com/andrewparadi/discourse-slack-official.git
 
+require_dependency 'discourse'
+require_dependency 'search'
+require_dependency 'search/grouped_search_results'
 require 'net/http'
 require 'json'
 require File.expand_path('../lib/validators/discourse_slack_enabled_setting_validator.rb', __FILE__)
+require 'time'
+require 'cgi'
 
 enabled_site_setting :slack_enabled
 
 PLUGIN_NAME = "discourse-slack-official".freeze
+SLACK_COMMAND = "atomic".freeze
+SLACK_EMOJI = ":rocket:".freeze
 
 register_asset "stylesheets/slack_admin.scss"
 
 after_initialize do
+  DOMAIN = Discourse.base_url
 
   unless ::PluginStore.get(PLUGIN_NAME, "not_first_time")
     ::PluginStore.set(PLUGIN_NAME, "not_first_time", true)
@@ -119,11 +127,19 @@ after_initialize do
 
       cmd = "help"
 
-      if tokens.size > 0 && tokens.size < 3
+      # if tokens.size > 0 && tokens.size < 3
+      if tokens.size > 0
         cmd = tokens[0]
       end
       ## TODO Put back URL finding
       case cmd
+      when "search"
+        if (tokens.size >= 2)
+          query = tokens[1..tokens.size-1].join(" ")
+          render json: DiscourseSlack::Slack.slack_search_results_message(query)
+        else
+          render json: { text: DiscourseSlack::Slack.help }
+        end
       when "watch", "follow", "mute"
         if (tokens.size == 2)
           cat_name = tokens[1]
@@ -248,12 +264,80 @@ after_initialize do
 
     def self.help
       %(
-      `/discourse [watch|follow|mute|help|status] [category|all]`
+      `/#{SLACK_COMMAND} [search|watch|follow|mute|help|status] [category|all|query]`
+*search* - find top topics that match a query
 *watch* – notify this channel for new topics and new replies
 *follow* – notify this channel for new topics
 *mute* – stop notifying this channel
 *status* – show current notification state and categories
 )
+    end
+
+    def self.slack_process_attachment(post, text)
+      topic = Topic.find_by(id: post.topic_id)
+      user = User.find_by(id: post.user_id)
+      category = Category.find_by(id: topic.category_id)
+      category_link = "#{DOMAIN}/c/#{category.slug}"
+
+      color = category.color
+      mrkdwn_in = ["text"]
+
+      title = topic.title
+      title_link = post.full_url
+
+      author_link = "#{DOMAIN}/users/#{user.username}"
+      author_name = "#{user.name}"
+      if (user.name.blank?)
+        author_name = "@#{user.username}"
+      end
+      # author_icon = DOMAIN + "/" + post
+
+      reading_time = 1+(topic.word_count/300).round
+      reply_emoji = "mailbox_with_mail"
+      if (topic.posts_count == 1)
+        reply_emoji = "mailbox_closed"
+      end
+
+      clock_emoji = "clock#{reading_time}"
+      if (reading_time > 11)
+        clock_emoji = "alarm_clock"
+      end
+      footer = "<#{category_link}|#{category.name}> :bookmark:   |   #{reading_time} mins :#{clock_emoji}:   |   #{post.like_count} :+1:   |   #{topic.posts_count-1} :#{reply_emoji}:   |   #{post.updated_at} :spiral_calendar_pad:"
+
+      # FIXME: Timestamp formatting to default Slack format
+
+      # t = Time.iso8601(post.updated_at)
+      # ts = t.strftime("%s")
+      # ts = Time(post.updated_at).strftime("%s")
+
+      fallback = "<#{title_link}|#{text}>"
+
+      # return { fallback: fallback, color: color, author_name: author_name, author_link: author_link, author_icon: author_icon, title: title, title_link: title_link, text: text, footer: footer, footer_icon: icon_emoji, ts: ts }
+      return { fallback: fallback, color: color, author_name: author_name, author_link: author_link, title: title, title_link: title_link, text: text, footer: footer, mrkdwn_in: mrkdwn_in}
+    end
+
+    def self.slack_search_results_message(query)
+      search = Search.new(query)
+      result = search.execute
+
+      username = "@#{SLACK_COMMAND}"
+      icon_emoji = SLACK_EMOJI
+      query_encoded = CGI::escape(query)
+      search_link = "#{DOMAIN}/search?q=#{query_encoded}"
+      initial_text = "Top results for `#{query}` #{search_link}"
+      if (!result.posts.any?)
+        initial_text = "No results for `#{query}` #{search_link}"
+      end
+      attachments = []
+      # FIXME: No limit for posts returned, create hard limit and a more button linking to main search
+      result.posts.each_with_index { |post, index|
+        text = result.blurb(post)
+        text = text.gsub(query.downcase, "*#{query}*")
+        text = text.gsub(query.titleize, "*#{query}*")
+        text = text.gsub(query.upcase, "*#{query}*")
+        attachments[index] = slack_process_attachment(post, text)
+      }
+      return { username: username, icon_emoji: icon_emoji, text: initial_text, mrkdwn: true, attachments: attachments }
     end
 
     def self.slack_message(post, channel)
@@ -271,17 +355,22 @@ after_initialize do
       icon_url = SiteSetting.slack_icon_url
       icon_url = absolute(SiteSetting.logo_small_url) if SiteSetting.slack_icon_url.empty?
 
+
+      # FIXME: use helper function to generate attachments for generic formatting with emojis
       message = {
         channel: channel,
         username: SiteSetting.title,
         icon_url: icon_url.to_s,
-        attachments: []
+        attachments: [{
+          text: post.full_url
+          }]
       }
 
       summary = {
         fallback: "#{topic.title} - #{display_name}",
         author_name: display_name,
         author_icon: post.user.small_avatar_url,
+        author_link: "#{DOMAIN}/users/#{post.user.username}",
         color: '#' + topic.category.color,
         text: ::DiscourseSlack::Slack.excerpt(post.cooked, SiteSetting.slack_discourse_excerpt_length),
         mrkdwn_in: ["text"]
