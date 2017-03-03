@@ -16,8 +16,6 @@ require File.expand_path('../lib/validators/discourse_slack_enabled_setting_vali
 enabled_site_setting :slack_enabled
 
 PLUGIN_NAME = "discourse-slack-official".freeze
-SLACK_COMMAND = "atomic".freeze
-SLACK_EMOJI = ":rocket:".freeze
 
 register_asset "stylesheets/slack_admin.scss"
 
@@ -127,7 +125,6 @@ after_initialize do
 
       cmd = "help"
 
-      # if tokens.size > 0 && tokens.size < 3
       if tokens.size > 0
         cmd = tokens[0]
       end
@@ -290,7 +287,6 @@ after_initialize do
       if (user.name.blank?)
         author_name = "@#{user.username}"
       end
-      # author_icon = DOMAIN + "/" + post
 
       reading_time = 1+(topic.word_count/300).round
       reply_emoji = "mailbox_with_mail"
@@ -304,32 +300,21 @@ after_initialize do
       end
       footer = "<#{category_link}|#{category.name}> :bookmark:   |   #{reading_time} mins :#{clock_emoji}:   |   #{post.like_count} :+1:   |   #{topic.posts_count-1} :#{reply_emoji}:   |   #{post.updated_at} :spiral_calendar_pad:"
 
-      # FIXME: Timestamp formatting to default Slack format
-
-      # t = Time.iso8601(post.updated_at)
-      # ts = t.strftime("%s")
-      # ts = Time(post.updated_at).strftime("%s")
-
       fallback = "<#{title_link}|#{text}>"
 
-      # return { fallback: fallback, color: color, author_name: author_name, author_link: author_link, author_icon: author_icon, title: title, title_link: title_link, text: text, footer: footer, footer_icon: icon_emoji, ts: ts }
       return { fallback: fallback, color: color, author_name: author_name, author_link: author_link, title: title, title_link: title_link, text: text, footer: footer, mrkdwn_in: mrkdwn_in}
     end
 
     def self.slack_search_results_message(query)
       search = Search.new(query)
       result = search.execute
-
-      username = "@#{SLACK_COMMAND}"
-      icon_emoji = SLACK_EMOJI
       query_encoded = CGI::escape(query)
       search_link = "#{DOMAIN}/search?q=#{query_encoded}"
-      initial_text = "Top results for `#{query}` #{search_link}"
+      initial_text = "Top 5 results for `#{query}` #{search_link}"
       if (!result.posts.any?)
         initial_text = "No results for `#{query}` #{search_link}"
       end
       attachments = []
-      # FIXME: No limit for posts returned, create hard limit and a more button linking to main search
       result.posts.each_with_index { |post, index|
         text = result.blurb(post)
         text = text.gsub(query.downcase, "*#{query}*")
@@ -337,6 +322,13 @@ after_initialize do
         text = text.gsub(query.upcase, "*#{query}*")
         attachments[index] = slack_process_attachment(post, text)
       }
+      if (attachments.length > 5)
+        remaining = attachments.length - 5
+        more_text = "See #{remaining} more results for `#{query}` #{search_link}"
+        more_message = { fallback: more_text, text: more_text }
+        attachments = attachments[0..5]
+        attachments[6] = more_message
+      end
       return { username: username, icon_emoji: icon_emoji, text: initial_text, mrkdwn: true, attachments: attachments }
     end
 
@@ -355,22 +347,17 @@ after_initialize do
       icon_url = SiteSetting.slack_icon_url
       icon_url = absolute(SiteSetting.logo_small_url) if SiteSetting.slack_icon_url.empty?
 
-
-      # FIXME: use helper function to generate attachments for generic formatting with emojis
       message = {
         channel: channel,
         username: SiteSetting.title,
         icon_url: icon_url.to_s,
-        attachments: [{
-          text: post.full_url
-          }]
+        attachments: []
       }
 
       summary = {
         fallback: "#{topic.title} - #{display_name}",
         author_name: display_name,
         author_icon: post.user.small_avatar_url,
-        author_link: "#{DOMAIN}/users/#{post.user.username}",
         color: '#' + topic.category.color,
         text: ::DiscourseSlack::Slack.excerpt(post.cooked, SiteSetting.slack_discourse_excerpt_length),
         mrkdwn_in: ["text"]
