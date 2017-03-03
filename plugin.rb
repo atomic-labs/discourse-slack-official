@@ -2,16 +2,16 @@
 # about: This is intended to be a feature-rich plugin for slack-discourse integration
 # version: 1.0.0
 # authors: Nick Sahler (nicksahler), Dave McClure (mcwumbly) for slack backdoor code. Andrew Paradi (andrewparadi) for search.
-# url: https://github.com/andrewparadi/discourse-slack-official.git
+# url: https://github.com/discourse/discourse-slack-official
 
 require_dependency 'discourse'
 require_dependency 'search'
 require_dependency 'search/grouped_search_results'
 require 'net/http'
 require 'json'
-require File.expand_path('../lib/validators/discourse_slack_enabled_setting_validator.rb', __FILE__)
 require 'time'
 require 'cgi'
+require File.expand_path('../lib/validators/discourse_slack_enabled_setting_validator.rb', __FILE__)
 
 enabled_site_setting :slack_enabled
 
@@ -264,7 +264,7 @@ after_initialize do
 
     def self.help
       %(
-      `/#{SLACK_COMMAND} [search|watch|follow|mute|help|status] [category|all|query]`
+      `/discourse [search|watch|follow|mute|help|status] [category|all|query]`
 *search* - find top topics that match a query
 *watch* – notify this channel for new topics and new replies
 *follow* – notify this channel for new topics
